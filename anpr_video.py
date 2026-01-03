@@ -1,10 +1,20 @@
 import streamlit as st
 import cv2
 import re
-from ultralytics import YOLO
-import easyocr
 from collections import defaultdict, Counter
 import tempfile
+
+# ===============================
+# SAFE ML IMPORT (CLOUD GUARD)
+# ===============================
+ML_AVAILABLE = False
+
+try:
+    from ultralytics import YOLO
+    import easyocr
+    ML_AVAILABLE = True
+except Exception:
+    ML_AVAILABLE = False
 
 # ===============================
 # STREAMLIT CONFIG
@@ -13,12 +23,24 @@ st.set_page_config(page_title="ANPR Video", layout="wide")
 st.title("🚘 ANPR Video (Indian Plates + Self-Correcting OCR)")
 
 # ===============================
+# STOP IF ML NOT AVAILABLE
+# ===============================
+if not ML_AVAILABLE:
+    st.error(
+        "🚫 YOLO + OCR cannot run on Streamlit Cloud.\n\n"
+        "Reason: Torch is incompatible with Python 3.13.\n\n"
+        "✅ This app runs correctly on LOCAL / DOCKER / HUGGING FACE.\n"
+        "📌 Deploy this UI here, run inference elsewhere."
+    )
+    st.stop()
+
+# ===============================
 # LOAD MODELS
 # ===============================
 @st.cache_resource
 def load_models():
     model = YOLO("best.pt")
-    reader = easyocr.Reader(['en'], gpu=True)
+    reader = easyocr.Reader(['en'], gpu=False)
     return model, reader
 
 model, reader = load_models()
@@ -43,17 +65,14 @@ def clean_plate(text):
     if len(text) < 8:
         return ""
 
-    # ---- State code correction ----
     state = text[:2].replace('0', 'O')
     if state not in INDIAN_STATE_CODES:
         return ""
 
-    # ---- Middle + number correction ----
     mid = text[2:-4].replace('O', '0').replace('I', '1')
     last = text[-4:].replace('O', '0')
 
-    plate = state + mid + last
-    return plate
+    return state + mid + last
 
 # ===============================
 # VIDEO UPLOAD
@@ -70,6 +89,7 @@ if uploaded:
 
     if st.button("▶️ Run ANPR"):
         cap = cv2.VideoCapture(video_path)
+
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS)
@@ -82,9 +102,6 @@ if uploaded:
             (w, h)
         )
 
-        # ===============================
-        # VOTING MEMORY (PER VEHICLE)
-        # ===============================
         plate_votes = defaultdict(list)
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -119,13 +136,8 @@ if uploaded:
                 if crop.size == 0:
                     continue
 
-                # ===============================
-                # OCR PREPROCESS
-                # ===============================
                 gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-                gray = cv2.resize(
-                    gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC
-                )
+                gray = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
 
                 texts = reader.readtext(
                     gray,
@@ -147,9 +159,6 @@ if uploaded:
                         plate_votes[track_id]
                     ).most_common(1)[0][0]
 
-                # ===============================
-                # DRAW BOX + TOP LABEL
-                # ===============================
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
                 if final_text:
