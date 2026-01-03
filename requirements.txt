@@ -1,9 +1,5 @@
-streamlit>=1.30.0
-torchvision==0.16.2
-torchaudio==2.1.2
+streamlit
 opencv-python-headless
-python-3.10.13
 numpy
 pillow
 pandas
-
