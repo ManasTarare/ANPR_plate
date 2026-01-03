@@ -1,6 +1,4 @@
 streamlit>=1.30.0
-ultralytics>=8.0.0
-torch==2.1.2
 torchvision==0.16.2
 torchaudio==2.1.2
 opencv-python-headless
@@ -8,3 +6,4 @@ python-3.10.13
 numpy
 pillow
 pandas
+
