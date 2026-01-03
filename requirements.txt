@@ -1,18 +1,9 @@
-# Core
-python>=3.10,<3.11
-
-# Deep learning
-torch==2.9.1+cpu
-torchvision==0.20.1+cpu
-torchaudio==2.9.1+cpu
-
-# YOLO + tracking
-ultralytics==8.2.86
-lap>=0.5.12
-
-# OCR
-easyocr==1.7.1
-
-# Computer Vision
-opencv-python==4.10.0.84
-numpy==1.26.4
+streamlit>=1.30.0
+ultralytics>=8.0.0
+torch==2.1.2
+torchvision==0.16.2
+torchaudio==2.1.2
+opencv-python-headless
+numpy
+pillow
+pandas
