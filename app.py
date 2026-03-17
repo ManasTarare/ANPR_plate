@@ -18,11 +18,17 @@ st.title("📸 Automatic Number Plate Recognition (Indian Plates)")
 # ===============================
 @st.cache_resource
 def load_models():
+    # Detect if GPU is available (False on Streamlit Free Cloud)
+    use_gpu = torch.cuda.is_available()
+    
+    # Load YOLO
     model = YOLO("best.pt")
-    reader = easyocr.Reader(['en'], gpu=True)
-    return model, reader
-
-model, reader = load_models()
+    
+    # Load EasyOCR
+    reader = easyocr.Reader(['en'], gpu=use_gpu)
+    
+    device_name = "GPU" if use_gpu else "CPU"
+    return model, reader, device_name
 
 # ===============================
 # OCR CONFUSION FIX
