@@ -1,8 +1,3 @@
-import os
-# Force headless mode to prevent libGL/GUI errors
-os.environ["QT_QPA_PLATFORM"] = "offscreen"
-os.environ["OPENCV_VIDEOIO_PRIORITY_MSMF"] = "0"
-
 import streamlit as st
 import cv2
 import numpy as np
@@ -12,96 +7,152 @@ import re
 from collections import Counter
 from PIL import Image
 import torch
+import os
 
 # ===============================
-# CONFIG & UI
+# STREAMLIT CONFIG
 # ===============================
-st.set_page_config(page_title="ANPR India", layout="wide")
-st.title("📸 Indian Number Plate Recognition")
+st.set_page_config(page_title="ANPR Image System", layout="wide")
+st.title("📸 Automatic Number Plate Recognition (Indian Plates)")
 
 # ===============================
-# MODEL LOADER (Cloud Optimized)
+# MODEL PATH
+# ===============================
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "best.pt")
+
+# ===============================
+# LOAD MODELS
 # ===============================
 @st.cache_resource
 def load_models():
-    # Use CPU for Streamlit Cloud Free Tier
-    use_gpu = torch.cuda.is_available()
-    
-    # Load YOLO (Ensure best.pt is in the same folder)
-    model = YOLO("best.pt")
-    
-    # Load EasyOCR
-    reader = easyocr.Reader(['en'], gpu=use_gpu)
-    
-    return model, reader, "GPU" if use_gpu else "CPU"
+    try:
+        use_gpu = torch.cuda.is_available()
+        model = YOLO(MODEL_PATH)
+        reader = easyocr.Reader(['en'], gpu=use_gpu)
+        device_name = "GPU" if use_gpu else "CPU"
+        return model, reader, device_name
+    except Exception as e:
+        st.error(f"Model loading failed: {e}")
+        st.stop()
 
-model, reader, device_type = load_models()
+model, reader, device = load_models()
+st.write(f"Running on: {device}")
 
 # ===============================
-# LOGIC HELPERS
+# OCR CONFUSION FIX
 # ===============================
-OCR_FIX = {'O': '0', 'I': '1', 'Z': '2', 'S': '5', 'B': '8', 'G': '6'}
-INDIAN_REGEX = re.compile(r'^[A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{3,4}$')
+OCR_FIX = {
+    'O': '0',
+    'I': '1',
+    'Z': '2',
+    'S': '5',
+    'B': '8',
+    'G': '6'
+}
 
-def clean_and_normalize(text):
-    text = re.sub(r'[^A-Z0-9]', '', text.upper())
+# ===============================
+# REGEX (SOFT VALIDATION)
+# ===============================
+SOFT_INDIAN_REGEX = re.compile(
+    r'^[A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{3,4}$'
+)
+
+# ===============================
+# HELPERS
+# ===============================
+def clean_text(text):
+    text = text.upper()
+    return re.sub(r'[^A-Z0-9]', '', text)
+
+def normalize_plate(text):
     return ''.join(OCR_FIX.get(c, c) for c in text)
 
-def preprocess(img):
+def preprocess_plate(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    # Enhance contrast for better OCR
     gray = cv2.bilateralFilter(gray, 11, 17, 17)
-    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                   cv2.THRESH_BINARY, 11, 2)
+    _, thresh = cv2.threshold(
+        gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+    )
+    thresh = cv2.resize(thresh, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
     return thresh
 
 # ===============================
-# SIDEBAR / UPLOAD
+# IMAGE UPLOAD
 # ===============================
-st.sidebar.header("Settings")
-st.sidebar.write(f"Running on: **{device_type}**")
-uploaded = st.file_uploader("Upload Vehicle Image", type=["jpg", "png", "jpeg"])
+uploaded = st.file_uploader(
+    "Upload a vehicle image",
+    type=["jpg", "jpeg", "png"]
+)
 
 if uploaded:
-    img = Image.open(uploaded).convert("RGB")
-    frame = np.array(img)
-    display_frame = frame.copy()
+    image = Image.open(uploaded).convert("RGB")
+    frame = np.array(image)
 
-    if st.button("🚀 Start Recognition"):
-        with st.spinner("Analyzing..."):
-            # 1. Detection
-            results = model(frame, conf=0.4, verbose=False)[0]
-            
-            plates_found = []
-            
-            if results.boxes:
+    if st.button("🔍 Run ANPR"):
+        with st.spinner("Processing image..."):
+
+            results = model(frame, conf=0.3, verbose=False)[0]
+
+            plate_counter = Counter()
+            debug_ocr = []
+
+            if results.boxes is not None:
+                h, w, _ = frame.shape
+
                 for box in results.boxes.xyxy:
                     x1, y1, x2, y2 = map(int, box)
-                    
-                    # 2. Crop & Preprocess
-                    plate_crop = frame[y1:y2, x1:x2]
-                    if plate_crop.size == 0: continue
-                    
-                    processed_plate = preprocess(plate_crop)
-                    
-                    # 3. OCR (Optimized for multiple snippets)
-                    ocr_res = reader.readtext(processed_plate, detail=0)
-                    raw_text = "".join(ocr_res)
-                    final_text = clean_and_normalize(raw_text)
-                    
-                    if 7 <= len(final_text) <= 11:
-                        plates_found.append(final_text)
-                        # Draw on UI
-                        cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                        cv2.putText(display_frame, final_text, (x1, y1-10), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-            # 4. Display results
-            st.image(display_frame, use_container_width=True)
-            
-            if plates_found:
-                st.success(f"### ✅ Detected Plate: {plates_found[0]}")
-                if not INDIAN_REGEX.match(plates_found[0]):
-                    st.warning("Note: Format doesn't match standard Indian Plate (e.g., MH12AB1234)")
+                    # Safe bounding box
+                    x1, y1 = max(0, x1), max(0, y1)
+                    x2, y2 = min(w, x2), min(h, y2)
+
+                    crop = frame[y1:y2, x1:x2]
+                    if crop.size == 0:
+                        continue
+
+                    proc = preprocess_plate(crop)
+
+                    texts = reader.readtext(
+                        proc,
+                        detail=0,
+                        allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                    )
+
+                    debug_ocr.extend(texts)
+
+                    for t in texts:
+                        cleaned = clean_text(t)
+
+                        if not (8 <= len(cleaned) <= 11):
+                            continue
+
+                        normalized = normalize_plate(cleaned)
+
+                        if SOFT_INDIAN_REGEX.match(normalized):
+                            plate_counter[normalized] += 1
+
+                    # Draw bounding box
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+            final_plate = None
+            confidence = 0.0
+
+            if plate_counter:
+                final_plate, score = plate_counter.most_common(1)[0]
+                confidence = score / sum(plate_counter.values())
+
+            # ===============================
+            # DISPLAY
+            # ===============================
+            st.image(frame, caption="Detected Plates", use_column_width=True)
+
+            st.subheader("🔎 OCR Debug Output")
+            st.write(debug_ocr)
+
+            if final_plate:
+                st.success(f"🪪 Plate Number: **{final_plate}**")
+                st.info(f"Confidence: {confidence:.2f}")
             else:
-                st.error("No plate detected. Ensure the plate is clearly visible.")
+                st.warning("No valid Indian number plate detected")
+
+
